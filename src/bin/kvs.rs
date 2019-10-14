@@ -1,3 +1,4 @@
+use kvs::{KvStore, Result};
 use structopt::StructOpt;
 
 #[derive(StructOpt, Debug)]
@@ -22,7 +23,7 @@ enum Opt {
     },
 }
 
-fn main() {
+fn main() -> Result<()> {
     match Opt::from_args() {
         Opt::Get { key } => get(key),
         Opt::Set { key, value } => set(key, value),
@@ -30,14 +31,32 @@ fn main() {
     }
 }
 
-fn get(key: String) {
-    panic!("unimplemented")
+fn get(key: String) -> Result<()> {
+    let current_directory = std::env::current_dir()?;
+    let store = KvStore::open(current_directory)?;
+
+    store.get(key).and_then(|opt| {
+        match opt {
+            Some(value) => println!("{}", value),
+            None => println!("Key not found"),
+        }
+        Ok(())
+    })
 }
 
-fn set(key: String, value: String) {
-    panic!("unimplemented")
+fn set(key: String, value: String) -> Result<()> {
+    let current_directory = std::env::current_dir()?;
+    let mut store = KvStore::open(current_directory)?;
+
+    store.set(key, value)
 }
 
-fn rm(key: String) {
-    panic!("unimplemented")
+fn rm(key: String) -> Result<()> {
+    let current_directory = std::env::current_dir()?;
+    let mut store = KvStore::open(current_directory)?;
+
+    store.remove(key).or_else(|err| {
+        println!("{}", err);
+        Err(err)
+    })
 }
