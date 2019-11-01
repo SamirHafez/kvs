@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, Seek, Write};
+use std::io::{self, Seek};
 use std::iter::FromIterator;
 use std::path::{Path, PathBuf};
 
@@ -22,7 +22,7 @@ pub enum KvError {
     /// An error that occurred due to IO issues
     IoError(io::Error),
     /// An error that occurred due to Serde issues
-    SerdeError(serde_json::Error),
+    SerdeError(bincode::Error),
     /// Operational error
     KvError(String),
 }
@@ -43,8 +43,8 @@ impl From<io::Error> for KvError {
     }
 }
 
-impl From<serde_json::Error> for KvError {
-    fn from(error: serde_json::Error) -> Self {
+impl From<bincode::Error> for KvError {
+    fn from(error: bincode::Error) -> Self {
         KvError::SerdeError(error)
     }
 }
@@ -129,9 +129,8 @@ impl KvStore {
         let offset = log_file.stream_len()?;
 
         let command = KvCommand::Set(key.to_owned(), value.to_owned());
-        let serialized = serde_json::to_string(&command)?;
 
-        writeln!(log_file, "{}", serialized)?;
+        bincode::serialize_into(log_file, &command)?;
 
         let location = KvLocation {
             file_id: self.current_file_id,
@@ -171,10 +170,7 @@ impl KvStore {
 
                 buffered_reader.seek(io::SeekFrom::Start(position.offset))?;
 
-                let mut line = String::default();
-                buffered_reader.read_line(&mut line)?;
-
-                let command = serde_json::from_str(&line.trim())?;
+                let command = bincode::deserialize_from(buffered_reader)?;
 
                 match command {
                     KvCommand::Set(_key, value) => Ok(Some(value)),
@@ -201,12 +197,10 @@ impl KvStore {
         match self.cache.remove(&key) {
             Some(_) => {
                 let log_path = file_path(&self.path, self.current_file_id);
-                let mut log_file = OpenOptions::new().append(true).open(log_path)?;
+                let log_file = OpenOptions::new().append(true).open(log_path)?;
 
                 let command = KvCommand::Rm(key.to_owned());
-                let serialized = serde_json::to_string(&command)?;
-
-                writeln!(log_file, "{}", serialized)?;
+                bincode::serialize_into(log_file, &command)?;
 
                 Ok(())
             }
@@ -244,15 +238,11 @@ fn update_cache(
     let log_file = File::open(&log_path)?;
     let mut buffered_reader = io::BufReader::new(log_file);
 
-    let mut line = String::default();
+    let stream_len = buffered_reader.stream_len()?;
     let mut offset = 0;
 
-    while let Ok(read) = buffered_reader.read_line(&mut line) {
-        if read == 0 {
-            break;
-        }
-
-        let command = serde_json::from_str(&line.trim())?;
+    while offset != stream_len {
+        let command = bincode::deserialize_from(&mut buffered_reader)?;
         match command {
             KvCommand::Set(key, _value) => {
                 let location = KvLocation {
@@ -267,7 +257,6 @@ fn update_cache(
             KvCommand::Get(_) => (),
         }
         offset = buffered_reader.stream_position()?;
-        line = String::default();
     }
 
     Ok(cache)
